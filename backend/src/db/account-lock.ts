@@ -3,6 +3,7 @@ import type { PoolClient } from "pg";
 export interface LockedAccount {
   id: string;
   balance_paise: string;
+  status: string;
 }
 
 export async function lockAccounts(
@@ -11,8 +12,8 @@ export async function lockAccounts(
 ): Promise<LockedAccount[]> {
   const result = await client.query<LockedAccount>(
     `
-      SELECT id, balance_paise
-      FROM accounts
+      SELECT id, balance_paise, status
+FROM accounts
       WHERE id = ANY($1::uuid[])
       ORDER BY id
       FOR UPDATE
