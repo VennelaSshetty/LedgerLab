@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import {
   getTransferLedger,
   createTransfer,
@@ -37,7 +38,15 @@ function isDatabaseUnavailableError(error: unknown): boolean {
 
 router.post("/", async (req, res) => {
   const { fromAccountId, toAccountId, amountPaise } = req.body;
+
   const idempotencyKey = req.header("Idempotency-Key");
+
+  const requestId = req.header("X-Request-ID") || randomUUID();
+  const correlationId = req.header("X-Correlation-ID") || randomUUID();
+
+  // Return the request ID so the caller can identify this HTTP attempt.
+  res.setHeader("X-Request-ID", requestId);
+  res.setHeader("X-Correlation-ID", correlationId);
 
  if (!idempotencyKey) {
   return res.status(400).json({
@@ -49,12 +58,18 @@ router.post("/", async (req, res) => {
 }
 
   try {
-    const result = await createTransfer({
-      fromAccountId,
-      toAccountId,
-      amountPaise,
-      idempotencyKey,
-    });
+const result = await createTransfer({
+  fromAccountId,
+  toAccountId,
+  amountPaise,
+  idempotencyKey,
+  correlationId,
+});
+
+res.setHeader(
+  "X-Correlation-ID",
+  result.transfer.correlationId
+);
 
     return res.status(result.replayed ? 200 : 201).json(result);
   } catch (error) {

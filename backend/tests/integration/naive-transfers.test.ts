@@ -119,11 +119,12 @@ let receiverId: string;
       await bothReadBalances;
     };
 
-    const input = {
-      fromAccountId: senderId,
-      toAccountId: receiverId,
-      amountPaise: "100",
-    };
+   const input = {
+  fromAccountId: senderId,
+  toAccountId: receiverId,
+  amountPaise: "100",
+  correlationId: "naive-lost-update-correlation",
+};
 
     const results = await Promise.all([
       createNaiveTransfer(input, afterBalanceRead),
@@ -178,11 +179,12 @@ let receiverId: string;
   });
 
   it("creates two separate transfers when the same request is submitted twice", async () => {
-  const input = {
-    fromAccountId: senderId,
-    toAccountId: receiverId,
-    amountPaise: "100",
-  };
+ const input = {
+  fromAccountId: senderId,
+  toAccountId: receiverId,
+  amountPaise: "100",
+  correlationId: "naive-duplicate-test-correlation",
+};
 
   // Submit the exact same request twice.
   const firstTransfer = await createNaiveTransfer(input);

@@ -94,28 +94,63 @@ async function expectTransferError(
     expect(response.body.replayed).toBe(false);
   });
 
-  it("returns HTTP 200 when the same request is retried", async () => {
-    const input = {
+  it("propagates request ID and correlation ID through response headers", async () => {
+  const requestId = "route-request-001";
+  const correlationId = "route-correlation-001";
+
+  const response = await request(app)
+    .post("/api/transfers")
+    .set("Idempotency-Key", "route-propagation-001")
+    .set("X-Request-ID", requestId)
+    .set("X-Correlation-ID", correlationId)
+    .send({
       fromAccountId: senderId,
       toAccountId: receiverId,
       amountPaise: "20000",
-    };
+    });
 
-    const first = await request(app)
-      .post("/api/transfers")
-      .set("Idempotency-Key", "route-retry-001")
-      .send(input);
+  expect(response.status).toBe(201);
+  expect(response.headers["x-request-id"]).toBe(requestId);
+  expect(response.headers["x-correlation-id"]).toBe(correlationId);
+  expect(response.body.transfer.correlationId).toBe(correlationId);
+});
 
-    const second = await request(app)
-      .post("/api/transfers")
-      .set("Idempotency-Key", "route-retry-001")
-      .send(input);
+ it("returns HTTP 200 when the same request is retried", async () => {
+  const input = {
+    fromAccountId: senderId,
+    toAccountId: receiverId,
+    amountPaise: "20000",
+  };
 
-    expect(first.status).toBe(201);
-    expect(second.status).toBe(200);
-    expect(second.body.replayed).toBe(true);
-    expect(second.body.transfer.id).toBe(first.body.transfer.id);
-  });
+  const first = await request(app)
+    .post("/api/transfers")
+    .set("Idempotency-Key", "route-retry-001")
+    .set("X-Request-ID", "request-attempt-001")
+    .set("X-Correlation-ID", "logical-transfer-001")
+    .send(input);
+
+  const second = await request(app)
+    .post("/api/transfers")
+    .set("Idempotency-Key", "route-retry-001")
+    .set("X-Request-ID", "request-attempt-002")
+    .set("X-Correlation-ID", "logical-transfer-001-retry")
+    .send(input);
+
+  expect(first.status).toBe(201);
+  expect(second.status).toBe(200);
+
+  expect(second.body.replayed).toBe(true);
+  expect(second.body.transfer.id).toBe(first.body.transfer.id);
+
+  // Each HTTP attempt has its own request ID.
+  expect(first.headers["x-request-id"]).toBe("request-attempt-001");
+  expect(second.headers["x-request-id"]).toBe("request-attempt-002");
+
+  // Both attempts represent the same logical transfer.
+  expect(first.headers["x-correlation-id"]).toBe("logical-transfer-001");
+  expect(second.headers["x-correlation-id"]).toBe("logical-transfer-001");
+  expect(second.body.transfer.correlationId).toBe("logical-transfer-001");
+});
 
   it("returns HTTP 409 for insufficient funds", async () => {
     const response = await request(app)

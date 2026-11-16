@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import {
   createNaiveTransfer,
   type CreateNaiveTransferInput,
@@ -7,11 +8,18 @@ import {
 const router = Router();
 
 router.post("/", async (req, res) => {
+   const requestId = req.header("X-Request-ID") || randomUUID();
+  const correlationId = req.header("X-Correlation-ID") || randomUUID();
+
+  res.setHeader("X-Request-ID", requestId);
+  res.setHeader("X-Correlation-ID", correlationId);
+
   try {
     const input: CreateNaiveTransferInput = {
       fromAccountId: req.body.fromAccountId,
       toAccountId: req.body.toAccountId,
       amountPaise: req.body.amountPaise,
+      correlationId,
     };
 
     const transfer = await createNaiveTransfer(input);

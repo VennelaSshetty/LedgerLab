@@ -54,11 +54,12 @@ describe("Transfer service integration", () => {
 
   it("completes a transfer with balanced ledger entries and updated balances", async () => {
     const result = await createTransfer({
-      fromAccountId: SENDER_ID,
-      toAccountId: RECEIVER_ID,
-      amountPaise: "20000",
-      idempotencyKey: "transfer-success-001",
-    });
+  fromAccountId: SENDER_ID,
+  toAccountId: RECEIVER_ID,
+  amountPaise: "20000",
+  idempotencyKey: "transfer-success-001",
+  correlationId: "transfer-test-correlation",
+});
 
     expect(result.replayed).toBe(false);
     expect(result.transfer.status).toBe("COMPLETED");
@@ -115,11 +116,12 @@ describe("Transfer service integration", () => {
 
   it("returns the original transfer when the same request is retried", async () => {
     const input = {
-      fromAccountId: SENDER_ID,
-      toAccountId: RECEIVER_ID,
-      amountPaise: "20000",
-      idempotencyKey: "transfer-retry-001",
-    };
+  fromAccountId: SENDER_ID,
+  toAccountId: RECEIVER_ID,
+  amountPaise: "20000",
+  idempotencyKey: "transfer-retry-001",
+  correlationId: "transfer-test-correlation",
+};
 
     const first = await createTransfer(input);
     const second = await createTransfer(input);
@@ -175,12 +177,13 @@ expect(outbox.rows[0].count).toBe(1);
   });
 
     it("rejects a transfer when the sender has insufficient funds", async () => {
-    const input = {
-      fromAccountId: SENDER_ID,
-      toAccountId: RECEIVER_ID,
-      amountPaise: "60000",
-      idempotencyKey: "transfer-insufficient-001",
-    };
+   const input = {
+  fromAccountId: SENDER_ID,
+  toAccountId: RECEIVER_ID,
+  amountPaise: "60000",
+  idempotencyKey: "transfer-insufficient-001",
+  correlationId: "transfer-test-correlation",
+};
 
     await expect(createTransfer(input)).rejects.toThrow(
       "INSUFFICIENT_FUNDS"
@@ -225,12 +228,13 @@ expect(outbox.rows[0].count).toBe(1);
   });
 
     it("rejects reuse of an idempotency key with a different request", async () => {
-    const input = {
-      fromAccountId: SENDER_ID,
-      toAccountId: RECEIVER_ID,
-      amountPaise: "20000",
-      idempotencyKey: "transfer-key-reuse-001",
-    };
+   const input = {
+  fromAccountId: SENDER_ID,
+  toAccountId: RECEIVER_ID,
+  amountPaise: "20000",
+  idempotencyKey: "transfer-key-reuse-001",
+  correlationId: "transfer-test-correlation",
+};
 
     const first = await createTransfer(input);
 
@@ -271,13 +275,13 @@ expect(outbox.rows[0].count).toBe(1);
   });
 
     it("handles two simultaneous requests with the same idempotency key", async () => {
-    const input = {
-      fromAccountId: SENDER_ID,
-      toAccountId: RECEIVER_ID,
-      amountPaise: "20000",
-      idempotencyKey: "transfer-concurrent-001",
-    };
-
+   const input = {
+  fromAccountId: SENDER_ID,
+  toAccountId: RECEIVER_ID,
+  amountPaise: "20000",
+  idempotencyKey: "transfer-concurrent-001",
+  correlationId: "transfer-test-correlation",
+};
     const [first, second] = await Promise.all([
       createTransfer(input),
       createTransfer(input),
@@ -331,11 +335,12 @@ expect(outbox.rows[0].count).toBe(1);
 
     it("rolls back all changes when a database operation fails", async () => {
     const input = {
-      fromAccountId: SENDER_ID,
-      toAccountId: RECEIVER_ID,
-      amountPaise: "20000",
-      idempotencyKey: "x".repeat(256),
-    };
+  fromAccountId: SENDER_ID,
+  toAccountId: RECEIVER_ID,
+  amountPaise: "20000",
+  idempotencyKey: "x".repeat(256),
+  correlationId: "transfer-test-correlation",
+};
 
     // The idempotency_keys.key column allows only 255 characters.
     await expect(createTransfer(input)).rejects.toThrow();
@@ -394,20 +399,22 @@ expect(outbox.rows[0].count).toBe(1);
   });
 
   it("prevents concurrent transfers from spending the same balance", async () => {
-  const results = await Promise.allSettled([
-    createTransfer({
-      fromAccountId: SENDER_ID,
-      toAccountId: RECEIVER_ID,
-      amountPaise: "40000",
-      idempotencyKey: "concurrent-transfer-001",
-    }),
-    createTransfer({
-      fromAccountId: SENDER_ID,
-      toAccountId: RECEIVER_ID,
-      amountPaise: "40000",
-      idempotencyKey: "concurrent-transfer-002",
-    }),
-  ]);
+ const results = await Promise.allSettled([
+  createTransfer({
+    fromAccountId: SENDER_ID,
+    toAccountId: RECEIVER_ID,
+    amountPaise: "40000",
+    idempotencyKey: "concurrent-transfer-001",
+    correlationId: "concurrent-transfer-correlation-001",
+  }),
+  createTransfer({
+    fromAccountId: SENDER_ID,
+    toAccountId: RECEIVER_ID,
+    amountPaise: "40000",
+    idempotencyKey: "concurrent-transfer-002",
+    correlationId: "concurrent-transfer-correlation-002",
+  }),
+]);
 
   const successful = results.filter(
     (result) => result.status === "fulfilled"

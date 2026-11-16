@@ -6,6 +6,7 @@ export type CreateNaiveTransferInput = {
   fromAccountId: string;
   toAccountId: string;
   amountPaise: string;
+  correlationId: string;
 };
 
 type NaiveAccount = {
@@ -100,28 +101,31 @@ if (afterBalanceRead) {
     const newReceiverBalance = receiverBalance + amount;
 
     const transferResult = await client.query(
-      `
-      INSERT INTO transfers (
-        from_account_id,
-        to_account_id,
-        amount_paise,
-        status
-      )
-      VALUES ($1, $2, $3, 'PENDING')
-      RETURNING
-        id,
-        from_account_id,
-        to_account_id,
-        amount_paise,
-        status,
-        created_at
-      `,
-      [
-        input.fromAccountId,
-        input.toAccountId,
-        input.amountPaise,
-      ]
-    );
+  `
+  INSERT INTO transfers (
+    from_account_id,
+    to_account_id,
+    amount_paise,
+    status,
+    correlation_id
+  )
+  VALUES ($1, $2, $3, 'PENDING', $4)
+  RETURNING
+    id,
+    from_account_id,
+    to_account_id,
+    amount_paise,
+    status,
+    created_at,
+    correlation_id
+  `,
+  [
+    input.fromAccountId,
+    input.toAccountId,
+    input.amountPaise,
+    input.correlationId,
+  ]
+);
 
     const transfer = transferResult.rows[0];
 

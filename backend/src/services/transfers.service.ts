@@ -9,6 +9,7 @@ export type CreateTransferInput = {
   toAccountId: string;
   amountPaise: string;
   idempotencyKey: string;
+  correlationId: string;
 };
 
 export async function getTransferLedger(transferId: string) {
@@ -168,21 +169,22 @@ await client.query(
     const requestHash = createRequestHash(input);
 
     // Check whether this user has already used this idempotency key.
-    const existingResult = await client.query(
-      `SELECT
-         ik.request_hash,
-         t.id,
-         t.from_account_id,
-         t.to_account_id,
-         t.amount_paise,
-         t.status,
-         t.created_at
-       FROM idempotency_keys ik
-       JOIN transfers t ON t.id = ik.transfer_id
-       WHERE ik.user_id = $1
-         AND ik.key = $2`,
-      [userId, input.idempotencyKey]
-    );
+   const existingResult = await client.query(
+  `SELECT
+     ik.request_hash,
+     t.id,
+     t.from_account_id,
+     t.to_account_id,
+     t.amount_paise,
+     t.status,
+     t.created_at,
+     t.correlation_id
+   FROM idempotency_keys ik
+   JOIN transfers t ON t.id = ik.transfer_id
+   WHERE ik.user_id = $1
+     AND ik.key = $2`,
+  [userId, input.idempotencyKey]
+);
 
     if (existingResult.rows.length > 0) {
       const existingTransfer = existingResult.rows[0];
@@ -196,17 +198,18 @@ await client.query(
 commitStarted = true;
 await client.query("COMMIT");
 
-      return {
-        transfer: {
-          id: existingTransfer.id,
-          fromAccountId: existingTransfer.from_account_id,
-          toAccountId: existingTransfer.to_account_id,
-          amountPaise: existingTransfer.amount_paise,
-          status: existingTransfer.status,
-          createdAt: existingTransfer.created_at,
-        },
-        replayed: true,
-      };
+     return {
+  transfer: {
+    id: existingTransfer.id,
+    fromAccountId: existingTransfer.from_account_id,
+    toAccountId: existingTransfer.to_account_id,
+    amountPaise: existingTransfer.amount_paise,
+    status: existingTransfer.status,
+    createdAt: existingTransfer.created_at,
+    correlationId: existingTransfer.correlation_id,
+  },
+  replayed: true,
+};
     }
  
     // Lock both accounts in a consistent order.
@@ -240,14 +243,17 @@ const transferResult = await client.query(
      from_account_id,
      to_account_id,
      amount_paise,
-     status
+     status,
+     correlation_id
    )
-   VALUES ($1, $2, $3, 'PENDING')
-   RETURNING id, from_account_id, to_account_id, amount_paise, status, created_at`,
+   VALUES ($1, $2, $3, 'PENDING', $4)
+   RETURNING id, from_account_id, to_account_id, amount_paise,
+             status, created_at, correlation_id`,
   [
     input.fromAccountId,
     input.toAccountId,
     input.amountPaise,
+    input.correlationId,
   ]
 );
 
@@ -328,6 +334,7 @@ return {
     amountPaise: transfer.amount_paise,
     status: "COMPLETED",
     createdAt: transfer.created_at,
+    correlationId: transfer.correlation_id,
   },
   replayed: false,
 };
