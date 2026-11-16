@@ -38,6 +38,14 @@ describe("POST /api/transfers", () => {
        VALUES ($1, $3, 50000), ($2, $3, 10000)`,
       [senderId, receiverId, userId]
     );
+
+    await adminPool.query(
+  `INSERT INTO account_opening_balances (account_id, amount_paise)
+   VALUES
+     ($1, 50000),
+     ($2, 10000)`,
+  [senderId, receiverId]
+);
   });
 
   afterEach(() => {
@@ -359,6 +367,14 @@ describe("GET /api/transfers/:id/ledger", () => {
        VALUES ($1, $3, 50000), ($2, $3, 10000)`,
       [testSenderId, testReceiverId, testUserId]
     );
+
+await adminPool.query(
+  `INSERT INTO account_opening_balances (account_id, amount_paise)
+   VALUES
+     ($1, 50000),
+     ($2, 10000)`,
+  [testSenderId, testReceiverId]
+);
 
     const transferResponse = await request(app)
       .post("/api/transfers")

@@ -53,11 +53,16 @@ async function attemptTransfer(): Promise<boolean> {
 describe("Account concurrency protection", () => {
   beforeAll(async () => {
     // Clean up previous test fixtures using the admin connection.
-    await adminPool.query(
-      "DELETE FROM accounts WHERE id = ANY($1::uuid[])",
-      [[SENDER_ID, RECEIVER_ID]]
-    );
+   // Clean up previous test fixtures using the admin connection.
+await adminPool.query(
+  "DELETE FROM account_opening_balances WHERE account_id = ANY($1::uuid[])",
+  [[SENDER_ID, RECEIVER_ID]]
+);
 
+await adminPool.query(
+  "DELETE FROM accounts WHERE id = ANY($1::uuid[])",
+  [[SENDER_ID, RECEIVER_ID]]
+);
     await adminPool.query(
       "DELETE FROM users WHERE id = $1",
       [USER_ID]
@@ -76,10 +81,21 @@ describe("Account concurrency protection", () => {
        VALUES ($1, $3, 50000), ($2, $3, 0)`,
       [SENDER_ID, RECEIVER_ID, USER_ID]
     );
+
+    await adminPool.query(
+  `INSERT INTO account_opening_balances (account_id, amount_paise)
+   VALUES ($1, 50000), ($2, 0)`,
+  [SENDER_ID, RECEIVER_ID]
+);
   });
 
   afterAll(async () => {
     // Clean up using the admin connection.
+    await adminPool.query(
+  "DELETE FROM account_opening_balances WHERE account_id = ANY($1::uuid[])",
+  [[SENDER_ID, RECEIVER_ID]]
+);
+
     await adminPool.query(
       "DELETE FROM accounts WHERE id = ANY($1::uuid[])",
       [[SENDER_ID, RECEIVER_ID]]

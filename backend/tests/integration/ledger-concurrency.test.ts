@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { pool } from "../../src/db/pool";
 import { adminPool } from "../helpers/admin-pool";
+import { deleteLedgerEntriesForTests } from "../helpers/cleanup-ledger-entries";
 
 const USER_ID = randomUUID();
 const SENDER_ID = randomUUID();
@@ -47,6 +48,14 @@ describe("Ledger concurrency protection", () => {
        VALUES ($1, $3, 100000), ($2, $3, 0)`,
       [SENDER_ID, RECEIVER_ID, USER_ID]
     );
+
+    await adminPool.query(
+  `INSERT INTO account_opening_balances (account_id, amount_paise)
+   VALUES
+     ($1, 100000),
+     ($2, 0)`,
+  [SENDER_ID, RECEIVER_ID]
+);
 
     await adminPool.query(
       `INSERT INTO transfers
@@ -204,9 +213,44 @@ describe("Ledger concurrency protection", () => {
     }
   });
 
-  afterAll(async () => {
-    // Ledger entries are append-only, so these random test fixtures
-    // are intentionally retained rather than deleted.
+   afterAll(async () => {
+   await deleteLedgerEntriesForTests([SENDER_ID, RECEIVER_ID]);
+
+    await adminPool.query(
+      `DELETE FROM idempotency_keys
+       WHERE transfer_id = ANY($1::uuid[])`,
+      [[TRANSFER_ID, INCOMPLETE_TRANSFER_ID]]
+    );
+
+    await adminPool.query(
+      `DELETE FROM outbox
+       WHERE transfer_id = ANY($1::uuid[])`,
+      [[TRANSFER_ID, INCOMPLETE_TRANSFER_ID]]
+    );
+
+    await adminPool.query(
+      `DELETE FROM transfers
+       WHERE id = ANY($1::uuid[])`,
+      [[TRANSFER_ID, INCOMPLETE_TRANSFER_ID]]
+    );
+
+    await adminPool.query(
+      `DELETE FROM account_opening_balances
+       WHERE account_id = ANY($1::uuid[])`,
+      [[SENDER_ID, RECEIVER_ID]]
+    );
+
+    await adminPool.query(
+      `DELETE FROM accounts
+       WHERE id = ANY($1::uuid[])`,
+      [[SENDER_ID, RECEIVER_ID]]
+    );
+
+    await adminPool.query(
+      `DELETE FROM users WHERE id = $1`,
+      [USER_ID]
+    );
+
     await pool.end();
     await adminPool.end();
   });

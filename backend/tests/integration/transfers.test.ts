@@ -35,6 +35,14 @@ describe("Transfer service integration", () => {
        VALUES ($1, $3, 50000), ($2, $3, 10000)`,
       [SENDER_ID, RECEIVER_ID, USER_ID]
     );
+
+    await adminPool.query(
+  `INSERT INTO account_opening_balances (account_id, amount_paise)
+   VALUES
+     ($1, 50000),
+     ($2, 10000)`,
+  [SENDER_ID, RECEIVER_ID]
+);
   });
 
   // Do not delete ledger entries.

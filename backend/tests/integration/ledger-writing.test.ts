@@ -35,6 +35,13 @@ describe("Double-entry ledger writing", () => {
     fromAccountId = accountsResult.rows[0].id;
     toAccountId = accountsResult.rows[1].id;
 
+    // Record the original opening balances for both accounts.
+await adminPool.query(
+  `INSERT INTO account_opening_balances (account_id, amount_paise)
+   VALUES ($1, 0), ($2, 0)`,
+  [fromAccountId, toAccountId]
+);
+
     // Create a pending transfer
     const transferResult = await adminPool.query(
       `INSERT INTO transfers (
@@ -68,6 +75,12 @@ describe("Double-entry ledger writing", () => {
       `DELETE FROM transfers WHERE id = $1`,
       [transferId]
     );
+
+    await adminPool.query(
+  `DELETE FROM account_opening_balances
+   WHERE account_id IN ($1, $2)`,
+  [fromAccountId, toAccountId]
+);
 
     await adminPool.query(
       `DELETE FROM accounts WHERE id IN ($1, $2)`,

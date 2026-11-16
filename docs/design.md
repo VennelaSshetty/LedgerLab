@@ -80,6 +80,46 @@ The system is designed around six invariants:
 
 PostgreSQL transactions, account locking, database constraints, idempotency, the transactional outbox, idempotent consumers, and reconciliation work together to protect these invariants.
 
+
+### 7.1 I4 — Acknowledgement History and Correlation
+
+I4 ensures that every successfully acknowledged transfer corresponds to exactly one committed financial execution.
+
+Currently, the transfer API supports two successful response scenarios:
+
+- HTTP 201: A new transfer is successfully committed.
+- HTTP 200: An existing transfer is returned when the same idempotency key is replayed.
+
+Both responses may refer to the same financial transfer. Therefore, multiple successful acknowledgements must not be interpreted as multiple financial executions.
+
+To independently verify I4, the system will introduce a dedicated `transfer_acknowledgements` history table in a later implementation phase.
+
+Each acknowledgement record will contain:
+
+- `id`: Unique acknowledgement record ID.
+- `request_id`: Unique identifier for the individual HTTP request.
+- `idempotency_key_id`: Foreign key referencing `idempotency_keys.id`.
+- `response_status`: HTTP response status (200 or 201).
+- `acknowledged_at`: Timestamp when the server records the successful response attempt.
+
+The existing relationship between `idempotency_keys` and `transfers` will be used to correlate acknowledgement records with their corresponding financial transfers.
+
+#### I4 Verification Rules
+
+1. Every acknowledgement must reference an existing idempotency-key record.
+2. The associated transfer must exist and have COMPLETED status.
+3. The response status must be either 200 or 201.
+4. Every request ID must be unique.
+5. Multiple acknowledgements may reference the same transfer because of legitimate idempotency replays.
+6. Multiple acknowledgements must not result in multiple financial executions.
+
+A completed transfer without an acknowledgement record is not automatically a failure because the server may crash after committing the transfer but before recording or sending its response.
+
+The history mechanism records successful server-side response attempts. It cannot independently prove that the client received the response.
+
+Until acknowledgement history is implemented and independently verified, I4 must report NOT VERIFIED.
+
+
 ## 8. Failure Testing and Observability
 
 The Failure Lab tests duplicate requests, concurrent transfers, process crashes, database failures, Kafka interruptions, and network faults.

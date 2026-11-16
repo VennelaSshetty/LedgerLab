@@ -27,6 +27,12 @@ describe("Database application-role permissions", () => {
        VALUES ($1, $2, 10000)`,
       [ACCOUNT_ID, USER_ID]
     );
+
+    await adminPool.query(
+  `INSERT INTO account_opening_balances (account_id, amount_paise)
+   VALUES ($1, 10000)`,
+  [ACCOUNT_ID]
+);
   });
 
   it("connects using the restricted application role", async () => {
@@ -101,18 +107,23 @@ describe("Database application-role permissions", () => {
     ).rejects.toMatchObject({ code: "42501" });
   });
 
-  afterAll(async () => {
-    await adminPool.query(
-      "DELETE FROM accounts WHERE id = $1",
-      [ACCOUNT_ID]
-    );
+afterAll(async () => {
+  await adminPool.query(
+    "DELETE FROM account_opening_balances WHERE account_id = $1",
+    [ACCOUNT_ID]
+  );
 
-    await adminPool.query(
-      "DELETE FROM users WHERE id = ANY($1::uuid[])",
-      [[USER_ID, INSERT_USER_ID]]
-    );
+  await adminPool.query(
+    "DELETE FROM accounts WHERE id = $1",
+    [ACCOUNT_ID]
+  );
 
-    await pool.end();
-    await adminPool.end();
-  });
+  await adminPool.query(
+    "DELETE FROM users WHERE id = ANY($1::uuid[])",
+    [[USER_ID, INSERT_USER_ID]]
+  );
+
+  await pool.end();
+  await adminPool.end();
+});
 });

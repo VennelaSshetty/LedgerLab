@@ -1,5 +1,6 @@
 import {
   afterAll,
+  afterEach,
   beforeEach,
   describe,
   expect,
@@ -9,13 +10,15 @@ import { randomUUID } from "node:crypto";
 import { pool } from "../../src/db/pool";
 import { adminPool } from "../helpers/admin-pool";
 import { createNaiveTransfer } from "../../src/services/naive-transfers.service";
+import { deleteLedgerEntriesForTests } from "../helpers/cleanup-ledger-entries";
 
 describe("Naive transfer concurrency", () => {
-  let senderId: string;
-  let receiverId: string;
+let userId: string;
+let senderId: string;
+let receiverId: string;
 
   beforeEach(async () => {
-    const userId = randomUUID();
+    userId = randomUUID();
 
     await adminPool.query(
       `INSERT INTO users (id, name, email, password_hash)
@@ -33,7 +36,65 @@ describe("Naive transfer concurrency", () => {
          ($2, $3, 10000, 'ACTIVE')`,
       [senderId, receiverId, userId]
     );
+
+    await adminPool.query(
+  `INSERT INTO account_opening_balances (account_id, amount_paise)
+   VALUES
+     ($1, 50000),
+     ($2, 10000)`,
+  [senderId, receiverId]
+);
   });
+
+  afterEach(async () => {
+  const accountIds = [senderId, receiverId];
+
+ await deleteLedgerEntriesForTests(accountIds);
+
+  await adminPool.query(
+    `DELETE FROM idempotency_keys
+     WHERE transfer_id IN (
+       SELECT id FROM transfers
+       WHERE from_account_id = ANY($1::uuid[])
+          OR to_account_id = ANY($1::uuid[])
+     )`,
+    [accountIds]
+  );
+
+  await adminPool.query(
+    `DELETE FROM outbox
+     WHERE transfer_id IN (
+       SELECT id FROM transfers
+       WHERE from_account_id = ANY($1::uuid[])
+          OR to_account_id = ANY($1::uuid[])
+     )`,
+    [accountIds]
+  );
+
+  await adminPool.query(
+    `DELETE FROM transfers
+     WHERE from_account_id = ANY($1::uuid[])
+        OR to_account_id = ANY($1::uuid[])`,
+    [accountIds]
+  );
+
+  await adminPool.query(
+    `DELETE FROM account_opening_balances
+     WHERE account_id = ANY($1::uuid[])`,
+    [accountIds]
+  );
+
+  await adminPool.query(
+    `DELETE FROM accounts
+     WHERE id = ANY($1::uuid[])`,
+    [accountIds]
+  );
+
+  await adminPool.query(
+    `DELETE FROM users WHERE id = $1`,
+    [userId]
+  );
+});
 
   afterAll(async () => {
     await pool.end();
