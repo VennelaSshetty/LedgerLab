@@ -1,155 +1,100 @@
 
-# Naive Mode vs Safe Mode — Comparison Experiment Design
+## 10. Implementation Status and Experimental Results
 
-## 1. Objective
+### 10.1 Execution Status
 
-Compare Naive Mode and Safe Mode using the same seeded transfer workload and equivalent initial database state.
+The seeded comparison workload was executed successfully against both modes.
 
-The experiment evaluates:
-- Transfer execution outcomes.
-- Financial correctness.
-- Concurrency-related failures.
-- Independent invariant verification.
-- Execution performance.
-
-The comparison must use actual database state rather than relying only on HTTP responses or execution history.
-
-## 2. Workload Configuration
-
-Use the existing seeded workload generator.
-
-| Parameter | Value |
-|---|---:|
-| Seed | 12345 |
-| Number of accounts | 10 |
-| Total transfer requests | 100 |
-| Invalid request percentage | 10% |
-| Expected valid requests | 90 |
-| Expected invalid requests | 10 |
-| Minimum amount | 100 paise |
-| Maximum amount | 100000 paise |
-| Concurrency | 5 |
-
-Generate the workload once and save it.
-
-The exact generated requests must be reused for both modes. Do not generate a second workload for Safe Mode.
-
-## 3. Initial Database State
-
-Use an isolated set of 10 experiment accounts.
-
-Each account starts with:
-
-- Opening balance: 1000000000000 paise.
-- A corresponding account_opening_balances record.
-- A known account ID.
-
-The initial account IDs and opening balances must remain equivalent across both runs.
-
-Existing project data must not be modified.
-
-## 4. Experiment Isolation
-
-The experiment must operate only on its designated accounts.
-
-The independent verifier will support an optional account-ID scope.
-
-Scoped verification will include:
-
-- I1: Total opening money versus current balances of experiment accounts.
-- I2: Debit-credit equality for experiment ledger entries and their transfers.
-- I3: Negative balances among experiment accounts.
-- I5: Completeness and consistency of experiment transfers.
-- I6: Projection consistency for experiment accounts.
-
-I4 remains NOT VERIFIED because acknowledgement-history verification has not been implemented.
-
-The existing full-database verification behaviour must remain available when no account scope is supplied.
-
-## 5. Execution Order
-
-### Run 1 — Naive Mode
-
-1. Prepare the isolated experiment accounts.
-2. Record their initial balances.
-3. Execute the saved workload using Naive Mode.
-4. Record execution history.
-5. Capture final account balances.
-6. Run the independent verifier with the experiment account IDs.
-7. Preserve the execution results.
-
-### Reset Between Runs
-
-Restore the experiment to its original state before running Safe Mode.
-
-The reset must:
-
-- Remove only experiment-related transfer records.
-- Remove only experiment-related ledger entries using the existing test cleanup mechanism.
-- Remove experiment-related outbox and idempotency records.
-- Restore the original account balances.
-- Preserve the experiment account IDs and opening-balance baselines.
-
-Do not truncate tables or delete unrelated users, accounts, transfers, or ledger records.
-
-### Run 2 — Safe Mode
-
-1. Confirm the experiment accounts match their original starting state.
-2. Replay the exact saved workload using Safe Mode.
-3. Record execution history separately.
-4. Capture final account balances.
-5. Run the independent verifier with the same experiment account IDs.
-6. Preserve the execution results.
-
-## 6. Results Collection
-
-Collect the following for both modes:
-
-| Measurement | Description |
+| Property | Result |
 |---|---|
-| Successful requests | Transfers accepted successfully |
-| Rejected requests | Requests rejected by validation or business rules |
-| Failed requests | Requests that failed during execution |
-| Unknown outcomes | Requests whose final outcome could not be established |
-| Timeouts | Requests exceeding the configured timeout |
-| Execution duration | Total workload execution time |
-| Latency | Request latency measurements |
-| Transfer count | Actual database transfer records |
-| Ledger entries | Actual database ledger records |
-| Final balances | Actual account balances |
-| Invariant results | Independent verifier outcomes |
+| Workload seed | 12345 |
+| Accounts | 10 |
+| Requests | 100 |
+| Valid requests | 90 |
+| Invalid requests | 10 |
+| Concurrency | 5 |
+| Initial balance per account | 1000000000000 paise |
+| Workload reused | Yes |
 
-## 7. Comparison Rules
+The same saved workload was used for both executions.
 
-- Both runs must use identical generated request inputs.
-- Both runs must start from equivalent account states.
-- Both runs must use the same workload concurrency and timeout configuration.
-- Execution histories must be stored separately.
-- Verification must use the same experiment account IDs.
-- Results must be based on actual observations.
-- No invariant failure or success may be assumed in advance.
+### 10.2 Execution Outcomes
 
-## 8. Expected Deliverables
+| Measurement | Naive Mode | Safe Mode |
+|---|---:|---:|
+| Total requests | 100 | 100 |
+| Successful requests | 90 | 90 |
+| Failed requests | 10 | 10 |
+| Timeouts | 0 | 0 |
+| Unknown outcomes | 0 | 0 |
+| Confirmed committed transfers | 90 | 90 |
+| Confirmed not committed | 10 | 10 |
+| Unknown transfer outcomes | 0 | 0 |
 
-The experiment will produce:
+### 10.3 Performance Results
 
-1. One saved seeded workload.
-2. Naive Mode execution history.
-3. Naive Mode verifier results.
-4. Safe Mode execution history.
-5. Safe Mode verifier results.
-6. A final comparison of execution outcomes, performance, and invariant results.
+Latency measurements are in milliseconds.
 
-## 9. Safety Constraints
+| Percentile | Naive Mode | Safe Mode |
+|---|---:|---:|
+| P50 | 42.0597 | 79.7657 |
+| P95 | 112.5877 | 203.9682 |
+| P99 | 211.2062 | 250.4915 |
 
-- Use the existing LedgerLab PostgreSQL database inside Docker.
-- Do not reset the entire database.
-- Do not modify unrelated historical records.
-- Preserve the existing full-database verifier.
-- Use the existing workload generator, history recorder, fixtures, and cleanup helpers wherever possible.
+Safe Mode exhibited higher latency in this particular 100-request execution.
 
-## 10. Implementation Status
+This single experiment is not sufficient to establish general performance characteristics.
 
-This document defines the comparison experiment.
+### 10.4 Scoped Invariant Verification
 
-The experiment has not yet been executed. Implementation changes required for scoped verification and workload execution will be completed before the actual comparison runs.
+The scoped verifier was executed against the Safe Mode database state, using the ten experiment accounts.
+
+| Invariant | Safe Mode Result |
+|---|---|
+| I1 - Total money conservation | PASS |
+| I2 - Debit-credit equality | PASS |
+| I3 - No negative balances | PASS |
+| I4 - Acknowledged exactly once | NOT VERIFIED |
+| I5 - No partial transfers | PASS |
+| I6 - Projection consistency | PASS |
+
+Additional observations:
+
+- Opening total: 10000000000000 paise.
+- Current total: 10000000000000 paise.
+- Total debits: 4228591 paise.
+- Total credits: 4228591 paise.
+- Negative balances: 0.
+- Invalid or partial transfers: 0.
+- Inconsistent account projections: 0.
+
+I4 remains NOT VERIFIED because acknowledgement-history recording has not been implemented.
+
+Naive Mode invariant results have not yet been independently verified. Therefore, no Naive Mode invariant result is claimed.
+
+### 10.5 Execution Artifacts
+
+The following artifacts were generated:
+
+- `workloads/naive-comparison-workload-12345.json`
+- `workloads/naive-comparison-history-12345.jsonl`
+- `workloads/safe-comparison-history-12345.jsonl`
+- `src/verifier/verify-comparison.ts`
+
+The scoped comparison verifier does not replace or modify the existing full-database verifier.
+
+### 10.6 Limitations
+
+1. The experiment uses one workload seed and one execution per mode.
+2. Latency measurements are specific to this execution and environment.
+3. Naive Mode has not yet received a separate scoped invariant verification.
+4. I4 remains unverified in both modes.
+5. The invariant results currently establish the Safe Mode database state only.
+
+### 10.7 Current Conclusion
+
+Both modes completed the same seeded workload with 90 successful and 10 failed requests.
+
+Safe Mode exhibited higher observed latency in this run. Its final database state passed I1, I2, I3, I5 and I6 under scoped independent verification.
+
+A complete correctness comparison requires independent verification of the Naive Mode state as well.

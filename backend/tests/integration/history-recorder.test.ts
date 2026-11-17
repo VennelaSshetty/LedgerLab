@@ -206,12 +206,12 @@ describe("History Recorder integration", () => {
 
     const workloadPath = join(
       workloadsDirectory,
-      "sample-execution-workload-12345.json",
+      "naive-comparison-workload-12345.json",
     );
 
     const historyPath = join(
       workloadsDirectory,
-      "sample-history-12345.jsonl",
+      "naive-comparison-history-12345.jsonl",
     );
 
     // Save the exact workload used for this execution.
@@ -252,11 +252,11 @@ describe("History Recorder integration", () => {
         throw new Error("Could not determine sample server port.");
       }
 
-      console.log("\nStarting 100-request Safe Mode sample...");
+      console.log("\nStarting 100-request Naive Mode comparison...");
 
       const records = await executeAndRecordWorkload(
         workload,
-        "SAFE",
+        "NAIVE",
         `http://127.0.0.1:${address.port}`,
         historyPath,
       );

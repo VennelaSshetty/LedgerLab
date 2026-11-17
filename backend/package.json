@@ -24,6 +24,7 @@
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "eslint": "^10.13.0",
+    "fast-check": "^4.10.2",
     "supertest": "^7.3.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
