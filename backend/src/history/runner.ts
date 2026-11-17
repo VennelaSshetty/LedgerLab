@@ -1,4 +1,3 @@
-
 import { executeWithConcurrency } from "../workload/executor";
 import type {
   GeneratedWorkload,
@@ -14,6 +13,7 @@ import type {
   RequestOutcome,
   TransferOutcome,
 } from "./types";
+import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 
 export type HttpResponseData = {
   httpStatus: number;
@@ -43,6 +43,7 @@ export type RequestExecutor<T> = (
 ) => Promise<T>;
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_HTTP_CONNECTIONS = 100;
 
 const CONNECTION_ERROR_CODES = new Set([
   "ECONNREFUSED",
@@ -277,14 +278,20 @@ function classifyRequestOutcome(
   return "UNKNOWN";
 }
 
+
 export async function runWorkloadOverHttp(
   workload: GeneratedWorkload,
   mode: ExecutionMode,
   baseUrl: string,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  maxConnections: number = DEFAULT_HTTP_CONNECTIONS,
 ): Promise<HttpWorkloadExecutionResult[]> {
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
     throw new Error("timeoutMs must be a positive integer.");
+  }
+
+  if (!Number.isInteger(maxConnections) || maxConnections <= 0) {
+    throw new Error("maxConnections must be a positive integer.");
   }
 
   const endpoint =
@@ -292,66 +299,81 @@ export async function runWorkloadOverHttp(
       ? "/api/transfers"
       : "/api/naive-transfers";
 
-  const results = await runWorkload(
-    workload,
-    async (transfer) => {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        "X-Request-ID": transfer.requestId,
-        "X-Correlation-ID": transfer.correlationId,
-      };
+  const originalDispatcher = getGlobalDispatcher();
 
-      if (mode === "SAFE") {
-        headers["Idempotency-Key"] = transfer.idempotencyKey;
+  const stressDispatcher = new Agent({
+    connections: maxConnections,
+    pipelining: 1,
+  });
+
+  setGlobalDispatcher(stressDispatcher);
+
+  try {
+    const results = await runWorkload(
+      workload,
+      async (transfer) => {
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+          "X-Request-ID": transfer.requestId,
+          "X-Correlation-ID": transfer.correlationId,
+        };
+
+        if (mode === "SAFE") {
+          headers["Idempotency-Key"] = transfer.idempotencyKey;
+        }
+
+        const response = await fetch(new URL(endpoint, baseUrl), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            fromAccountId: transfer.fromAccountId,
+            toAccountId: transfer.toAccountId,
+            amountPaise: transfer.amountPaise,
+          }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+
+        const responseBody = await readResponseBody(response);
+
+        return {
+          httpStatus: response.status,
+          responseBody,
+          transferId: extractTransferId(responseBody),
+        };
+      },
+    );
+
+    return results.map((result) => {
+      let historyError: HistoryError | null = null;
+
+      if (result.error !== undefined) {
+        historyError = classifyThrownError(result.error);
+      } else if (
+        result.result &&
+        (result.result.httpStatus < 200 ||
+          result.result.httpStatus >= 300)
+      ) {
+        historyError = classifyHttpError(
+          result.result.httpStatus,
+          result.result.responseBody,
+        );
       }
 
-      const response = await fetch(new URL(endpoint, baseUrl), {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          fromAccountId: transfer.fromAccountId,
-          toAccountId: transfer.toAccountId,
-          amountPaise: transfer.amountPaise,
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-
-      const responseBody = await readResponseBody(response);
+      const httpStatus = result.result?.httpStatus ?? null;
 
       return {
-        httpStatus: response.status,
-        responseBody,
-        transferId: extractTransferId(responseBody),
-      };
-    },
-  );
-
-  return results.map((result) => {
-    let historyError: HistoryError | null = null;
-
-    if (result.error !== undefined) {
-      historyError = classifyThrownError(result.error);
-    } else if (
-      result.result &&
-      (result.result.httpStatus < 200 ||
-        result.result.httpStatus >= 300)
-    ) {
-      historyError = classifyHttpError(
-        result.result.httpStatus,
-        result.result.responseBody,
-      );
-    }
-
-    const httpStatus = result.result?.httpStatus ?? null;
-
-    return {
-      ...result,
-      historyError,
-      outcome: classifyRequestOutcome(httpStatus, historyError),
-      transferOutcome: classifyTransferOutcome(
-        httpStatus,
+        ...result,
         historyError,
-      ),
-    };
-  });
+        outcome: classifyRequestOutcome(httpStatus, historyError),
+        transferOutcome: classifyTransferOutcome(
+          httpStatus,
+          historyError,
+        ),
+      };
+    });
+  } finally {
+    setGlobalDispatcher(originalDispatcher);
+    await stressDispatcher.close();
+  }
 }
+

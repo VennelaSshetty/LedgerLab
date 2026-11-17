@@ -12,6 +12,8 @@ The database testing covers:
 3. Account-level concurrency protection.
 4. Concurrent ledger insertion protection.
 5. Restricted application database permissions.
+6. End-to-end HTTP transfer stress testing.
+7. Independent ledger invariant verification.
 
 Testing was performed through manual PostgreSQL SQL tests and automated Vitest integration tests.
 
@@ -247,9 +249,120 @@ npm test
 - Tests passed: 12
 - Tests failed: 0
 
+
+### 6.2 Complete Test Suite Execution
+
+**Date:** November 17, 2026
+
+The complete backend test suite was executed using:
+
+```bash
+npm test
+```
+
+**Results:**
+
+| Metric | Result |
+|---|---:|
+| Test files passed | 23/23 |
+| Total tests passed | 179/179 |
+| Failed tests | 0 |
+| Duration | 41.58 seconds |
+
+The execution included unit tests, integration tests, workload tests, history tests, verifier tests, and transfer stress tests.
+
+**Result: PASSED**
+
+
 ---
 
-## 7. Overall Database Testing Summary
+
+## 7. End-to-End Transfer Stress Testing
+
+**Test file:** `tests/integration/transfer-stress.test.ts`
+
+These integration tests exercise concurrent transfer requests through the HTTP API and verify the resulting database state.
+
+### 7.1 Controlled Overspending
+
+**Scenario:** 1,000 concurrent transfer requests attempt to spend from an account containing ₹1,000.
+
+Verified:
+- 10 successful transfers.
+- 990 rejected due to insufficient funds.
+- Sender final balance: ₹0.
+- Receiver final balance: ₹1,000.
+- Exactly 20 ledger entries.
+- No partial transfers or unknown outcomes.
+
+**Result: PASSED**
+
+### 7.2 Concurrent Idempotency
+
+**Scenario:** 50 simultaneous requests use the same idempotency key.
+
+Verified:
+- 50 successful responses.
+- 49 idempotent replays.
+- Exactly one unique transfer ID.
+- Exactly one database transfer.
+- Exactly two ledger entries.
+- Sender final balance: ₹900.
+- Receiver final balance: ₹100.
+
+**Result: PASSED**
+
+### 7.3 Opposite-Direction Concurrent Transfers
+
+**Scenario:** Five rounds of 200 concurrent transfers in opposite directions.
+
+Verified:
+- 1,000 successful transfers.
+- Exactly 1,000 database transfers.
+- Exactly 2,000 ledger entries.
+- Both account balances remained ₹10,000.
+- No unknown outcomes.
+- PostgreSQL deadlock counter increase: 0.
+
+**Result: PASSED**
+
+### 7.4 Independent Ledger Verification
+
+After each scenario, the independent verifier checked the following invariants:
+
+| Invariant | Description | Result |
+|---|---|---|
+| I1 | Total money remains constant | PASS |
+| I2 | Debit and credit entries balance | PASS |
+| I3 | No negative account balances | PASS |
+| I5 | No partial transfers | PASS |
+| I6 | Projections match the ledger | PASS |
+
+All five checks passed after each of the three scenarios, resulting in 15 successful invariant checks.
+
+I4 remains NOT VERIFIED by this verifier.
+
+**Result: PASSED**
+
+### 7.5 Stress Test Execution
+
+Run from the backend directory:
+
+```bash
+npx vitest run tests/integration/transfer-stress.test.ts
+```
+
+**Confirmed execution — November 17, 2026**
+
+- Stress test scenarios passed: 3/3.
+- Invariant checks passed: 15/15.
+- Test failures: 0.
+
+**Overall Result: PASSED**
+
+---
+
+## 8. Overall Database Testing Summary
 
 | Testing Category | Verification Method | Status |
 |---|---|---|
@@ -262,15 +375,25 @@ npm test
 | Account-level concurrency | Automated integration test | PASSED |
 | Concurrent ledger insertion | Automated integration test | PASSED |
 | Application role permissions | Manual verification + automated test | PASSED |
+| End-to-end transfer stress testing | HTTP + PostgreSQL integration tests | PASSED |
+| Independent ledger verification | Invariant verifier | PASSED |
 
 ### Final Result
 
-Database integrity, concurrency protection, and application permission tests have been successfully verified.
+Database integrity, concurrency protection, application permissions, and end-to-end transfer behaviour have been successfully verified.
 
 **Manual database integrity tests: PASSED**
 
-**Automated integration tests: 12/12 PASSED**
+**Automated database integration tests: 12/12 PASSED**
+
+**Complete backend test suite (November 17): 179/179 PASSED**
+
+**End-to-end stress tests: 3/3 PASSED**
+
+**Independent invariant checks: 15/15 PASSED**
 
 **Overall database testing status: PASSED**
 
 Note: These tests verify database correctness, integrity, concurrency behaviour, and access control. They do not represent a database performance benchmark.
+
+
