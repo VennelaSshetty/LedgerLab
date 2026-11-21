@@ -14,6 +14,7 @@ import {
   claimOutboxBatch,
   publishOutboxBatch,
   acknowledgeOutboxEvent,
+  recoverFailedOutboxEvent,
 } from "../../src/services/outbox-publisher.service";
 
 let USER_ID: string;
@@ -188,31 +189,64 @@ describe("Outbox publisher integration", () => {
     expect(stored.rows[0].last_error).toBeNull();
   });
 
-  it("records a failed publication and releases the lease", async () => {
-    const transferId = await createOutboxEvent();
 
-    const result = await publishOutboxBatch({
+it("schedules a failed publication for a future retry", async () => {
+  const transferId = await createOutboxEvent();
+
+  const result = await publishOutboxBatch(
+    {
       async publish() {
         throw new Error("Test transport unavailable");
       },
-    }, 10, 30);
+    },
+    1,
+    30,
+  );
 
-    expect(result.failed).toBeGreaterThanOrEqual(1);
+  expect(result.failed).toBe(1);
 
-    const stored = await adminPool.query(
-      `SELECT status, locked_until, last_error, attempts
-       FROM outbox
-       WHERE transfer_id = $1`,
-      [transferId],
-    );
+  const stored = await adminPool.query(
+    `SELECT
+       status,
+       locked_until,
+       last_error,
+       attempts,
+       next_attempt_at,
+       NOW() AS database_now
+     FROM outbox
+     WHERE transfer_id = $1`,
+    [transferId],
+  );
 
-    expect(stored.rows[0].status).toBe("PENDING");
-    expect(stored.rows[0].locked_until).toBeNull();
-    expect(stored.rows[0].last_error).toBe(
-      "Test transport unavailable",
-    );
-    expect(stored.rows[0].attempts).toBe(1);
-  });
+  expect(stored.rows[0].status).toBe("PENDING");
+  expect(stored.rows[0].locked_until).toBeNull();
+  expect(stored.rows[0].last_error).toBe(
+    "Test transport unavailable",
+  );
+  expect(stored.rows[0].attempts).toBe(1);
+
+  const scheduledTime = new Date(
+    stored.rows[0].next_attempt_at,
+  ).getTime();
+
+  const databaseNow = new Date(
+    stored.rows[0].database_now,
+  ).getTime();
+
+  expect(scheduledTime).toBeGreaterThan(databaseNow);
+  expect(scheduledTime - databaseNow).toBeGreaterThanOrEqual(500);
+  expect(scheduledTime - databaseNow).toBeLessThanOrEqual(1000);
+
+  // The retry is not eligible yet.
+const prematureClaim = await claimOutboxBatch(1);
+
+expect(
+  prematureClaim.some(
+    (event) => event.transfer_id === transferId,
+  ),
+).toBe(false);
+});
+
 
   it("does not allow a stale publisher to overwrite a newer claim", async () => {
   const transferId = await createOutboxEvent();
@@ -442,6 +476,15 @@ it("recovers an event after an ambiguous publication timeout", async () => {
     "Publication acknowledgement timed out",
   );
 
+  // Simulate the scheduled retry time arriving.
+// This avoids waiting for the real backoff delay in the test.
+await adminPool.query(
+  `UPDATE outbox
+   SET next_attempt_at = NOW() - INTERVAL '1 second'
+   WHERE id = $1`,
+  [event.rows[0].id],
+);
+
   // Publisher 2 retries the event successfully.
   const secondDeliveryIds: string[] = [];
 
@@ -473,6 +516,143 @@ it("recovers an event after an ambiguous publication timeout", async () => {
   expect(stored.rows[0].attempts).toBe(2);
   expect(stored.rows[0].published_at).not.toBeNull();
   expect(stored.rows[0].locked_until).toBeNull();
+});
+
+it("marks an exhausted event FAILED after its publisher lease expires", async () => {
+  const transferId = await createOutboxEvent();
+
+  // Simulate an event that has already used all five attempts.
+  await adminPool.query(
+    `
+    UPDATE outbox
+    SET
+      status = 'PROCESSING',
+      attempts = 5,
+      locked_until = NOW() - INTERVAL '1 second',
+      last_error = 'Previous publication failure'
+    WHERE transfer_id = $1
+    `,
+    [transferId],
+  );
+
+  // The next publisher run should mark it FAILED.
+  const claimed = await claimOutboxBatch(10, 30);
+
+  expect(
+    claimed.some((event) => event.transfer_id === transferId),
+  ).toBe(false);
+
+  const stored = await adminPool.query(
+    `
+    SELECT status, attempts, locked_until, last_error
+    FROM outbox
+    WHERE transfer_id = $1
+    `,
+    [transferId],
+  );
+
+  expect(stored.rows[0].status).toBe("FAILED");
+  expect(stored.rows[0].attempts).toBe(5);
+  expect(stored.rows[0].locked_until).toBeNull();
+  expect(stored.rows[0].last_error).toBe(
+    "Previous publication failure",
+  );
+});
+
+it("recovers a FAILED event and resets its retry state", async () => {
+  const transferId = await createOutboxEvent();
+
+  const event = await adminPool.query(
+    `SELECT id FROM outbox WHERE transfer_id = $1`,
+    [transferId],
+  );
+
+  const eventId = event.rows[0].id;
+
+  await adminPool.query(
+    `
+    UPDATE outbox
+    SET
+      status = 'FAILED',
+      attempts = 5,
+      next_attempt_at = NOW() - INTERVAL '1 minute',
+      last_error = 'Maximum attempts reached'
+    WHERE id = $1
+    `,
+    [eventId],
+  );
+
+  const recovered = await recoverFailedOutboxEvent(eventId);
+
+  expect(recovered).toBe(true);
+
+  const stored = await adminPool.query(
+    `
+    SELECT
+      status,
+      attempts,
+      next_attempt_at,
+      locked_until,
+      last_error,
+      NOW() AS database_now
+    FROM outbox
+    WHERE id = $1
+    `,
+    [eventId],
+  );
+
+  expect(stored.rows[0].status).toBe("PENDING");
+  expect(stored.rows[0].attempts).toBe(0);
+  expect(stored.rows[0].locked_until).toBeNull();
+  expect(stored.rows[0].last_error).toBe(
+    "Maximum attempts reached",
+  );
+
+  expect(
+    new Date(stored.rows[0].next_attempt_at).getTime(),
+  ).toBeLessThanOrEqual(
+    new Date(stored.rows[0].database_now).getTime(),
+  );
+});
+
+it("does not recover events that are not FAILED", async () => {
+  const transferId = await createOutboxEvent();
+
+  const event = await adminPool.query(
+    `SELECT id FROM outbox WHERE transfer_id = $1`,
+    [transferId],
+  );
+
+  const eventId = event.rows[0].id;
+
+  // The event is still PENDING.
+  expect(
+    await recoverFailedOutboxEvent(eventId),
+  ).toBe(false);
+
+  // Claim it so that it becomes PROCESSING.
+  const claimed = await claimOutboxBatch(1, 30);
+
+  expect(claimed.some((item) => item.id === eventId)).toBe(true);
+
+  expect(
+    await recoverFailedOutboxEvent(eventId),
+  ).toBe(false);
+
+  // A PUBLISHED event must also be rejected.
+  await adminPool.query(
+    `
+    UPDATE outbox
+    SET status = 'PUBLISHED', published_at = NOW(),
+        locked_until = NULL
+    WHERE id = $1
+    `,
+    [eventId],
+  );
+
+  expect(
+    await recoverFailedOutboxEvent(eventId),
+  ).toBe(false);
 });
 
 });

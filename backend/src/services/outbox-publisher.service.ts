@@ -1,6 +1,9 @@
-
 import type { PoolClient } from "pg";
 import { pool } from "../db/pool";
+import {
+  RETRY_POLICY,
+  calculateRetryDelayMs,
+} from "./outbox-retry-policy";
 
 export interface OutboxEvent {
   id: string;
@@ -37,15 +40,45 @@ export async function claimOutboxBatch(
   try {
     await client.query("BEGIN");
 
+    await client.query(
+  `
+  UPDATE outbox
+  SET
+    status = 'FAILED',
+    locked_until = NULL,
+    last_error = COALESCE(
+      last_error,
+      'Maximum attempts reached after publisher crash'
+    )
+  WHERE attempts >= $1
+    AND (
+      status = 'PENDING'
+      OR (
+        status = 'PROCESSING'
+        AND locked_until <= NOW()
+      )
+    )
+  `,
+  [RETRY_POLICY.maxAttempts],
+);
+
     const result = await client.query<OutboxEvent>(
       `
       WITH candidates AS (
         SELECT id
         FROM outbox
         WHERE
-          (status = 'PENDING' AND next_attempt_at <= NOW())
-          OR
-          (status = 'PROCESSING' AND locked_until <= NOW())
+  (
+    status = 'PENDING'
+    AND next_attempt_at <= NOW()
+    AND attempts < $3
+  )
+  OR
+  (
+    status = 'PROCESSING'
+    AND locked_until <= NOW()
+    AND attempts < $3
+  )
         ORDER BY created_at ASC, id ASC
         LIMIT $1
         FOR UPDATE SKIP LOCKED
@@ -64,7 +97,7 @@ export async function claimOutboxBatch(
         o.payload,
         o.attempts
       `,
-      [batchSize, leaseSeconds],
+      [batchSize, leaseSeconds, RETRY_POLICY.maxAttempts],
     );
 
     await client.query("COMMIT");
@@ -99,6 +132,7 @@ export async function acknowledgeOutboxEvent(
   return result.rowCount === 1;
 }
 
+
 async function recordPublicationFailure(
   event: OutboxEvent,
   error: unknown,
@@ -106,23 +140,44 @@ async function recordPublicationFailure(
   const message =
     error instanceof Error ? error.message : String(error);
 
+  // attempts was already incremented when this event was claimed.
+  const canRetry = event.attempts < RETRY_POLICY.maxAttempts;
+
+  const retryDelayMs = canRetry
+    ? calculateRetryDelayMs(event.attempts)
+    : null;
+
   const result = await pool.query(
     `
     UPDATE outbox
     SET
-      status = 'PENDING',
-      next_attempt_at = NOW(),
+      status = CASE
+        WHEN $3 THEN 'PENDING'
+        ELSE 'FAILED'
+      END,
+      next_attempt_at = CASE
+        WHEN $3 THEN
+          NOW() + ($4 * INTERVAL '1 millisecond')
+        ELSE next_attempt_at
+      END,
       locked_until = NULL,
-      last_error = $3
+      last_error = $5
     WHERE id = $1
       AND status = 'PROCESSING'
       AND attempts = $2
     `,
-    [event.id, event.attempts, message],
+    [
+      event.id,
+      event.attempts,
+      canRetry,
+      retryDelayMs,
+      message,
+    ],
   );
 
   return result.rowCount === 1;
 }
+
 
 export async function publishOutboxBatch(
   transport: OutboxTransport,
@@ -160,4 +215,24 @@ export async function publishOutboxBatch(
   }
 
   return result;
+}
+
+export async function recoverFailedOutboxEvent(
+  eventId: string,
+): Promise<boolean> {
+  const result = await pool.query(
+    `
+    UPDATE outbox
+    SET
+      status = 'PENDING',
+      attempts = 0,
+      next_attempt_at = NOW(),
+      locked_until = NULL
+    WHERE id = $1
+      AND status = 'FAILED'
+    `,
+    [eventId],
+  );
+
+  return result.rowCount === 1;
 }
