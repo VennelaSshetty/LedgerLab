@@ -327,4 +327,152 @@ it("recovers and publishes an event left processing by a crashed publisher", asy
   expect(stored.rows[0].locked_until).toBeNull();
 });
 
+  
+it("redelivers the same event when the destination accepted it but the publisher crashed before acknowledgement", async () => {
+  const transferId = await createOutboxEvent();
+
+  // Publisher 1 claims the event.
+  const firstBatch = await claimOutboxBatch(1000, 30);
+
+  const firstEvent = firstBatch.find(
+    (event) => event.transfer_id === transferId,
+  );
+
+  expect(firstEvent).toBeDefined();
+
+  if (!firstEvent) {
+    throw new Error("Expected publisher to claim the test event");
+  }
+
+  // Simulate destination acceptance.
+  // The publisher crashes before acknowledging the event in PostgreSQL.
+  const destinationAcceptedIds: string[] = [];
+  destinationAcceptedIds.push(firstEvent.id);
+
+  // PostgreSQL still considers the event PROCESSING.
+  const afterCrash = await adminPool.query(
+    `SELECT status, published_at, attempts
+     FROM outbox
+     WHERE id = $1`,
+    [firstEvent.id],
+  );
+
+  expect(afterCrash.rows[0].status).toBe("PROCESSING");
+  expect(afterCrash.rows[0].published_at).toBeNull();
+
+  // Simulate the crashed publisher's lease expiring.
+  await adminPool.query(
+    `UPDATE outbox
+     SET locked_until = NOW() - INTERVAL '1 second'
+     WHERE id = $1`,
+    [firstEvent.id],
+  );
+
+  // Publisher 2 reclaims and sends the same event again.
+  const secondDeliveryIds: string[] = [];
+
+  const result = await publishOutboxBatch(
+    {
+      async publish(event) {
+        secondDeliveryIds.push(event.id);
+      },
+    },
+    1000,
+    30,
+  );
+
+  expect(secondDeliveryIds).toContain(firstEvent.id);
+  expect(result.published).toBeGreaterThanOrEqual(1);
+
+  // The destination accepted the same event twice.
+  const allDeliveries = [
+    ...destinationAcceptedIds,
+    ...secondDeliveryIds.filter((id) => id === firstEvent.id),
+  ];
+
+  expect(allDeliveries).toEqual([firstEvent.id, firstEvent.id]);
+
+  const stored = await adminPool.query(
+    `SELECT status, attempts, published_at, locked_until
+     FROM outbox
+     WHERE id = $1`,
+    [firstEvent.id],
+  );
+
+  expect(stored.rows[0].status).toBe("PUBLISHED");
+  expect(stored.rows[0].attempts).toBe(2);
+  expect(stored.rows[0].published_at).not.toBeNull();
+  expect(stored.rows[0].locked_until).toBeNull();
+});
+
+  
+it("recovers an event after an ambiguous publication timeout", async () => {
+  const transferId = await createOutboxEvent();
+
+  // Simulate a destination that accepts the event,
+  // but whose acknowledgement is lost due to a timeout.
+  const destinationAcceptedIds: string[] = [];
+
+ const firstResult = await publishOutboxBatch(
+  {
+    async publish(event) {
+      destinationAcceptedIds.push(event.id);
+      throw new Error("Publication acknowledgement timed out");
+    },
+  },
+  1,
+  30,
+);
+
+  expect(firstResult.failed).toBeGreaterThanOrEqual(1);
+
+  const event = await adminPool.query(
+    `SELECT id, status, attempts, published_at, locked_until, last_error
+     FROM outbox
+     WHERE transfer_id = $1`,
+    [transferId],
+  );
+
+  expect(event.rows).toHaveLength(1);
+  expect(event.rows[0].status).toBe("PENDING");
+  expect(event.rows[0].attempts).toBe(1);
+  expect(event.rows[0].published_at).toBeNull();
+  expect(event.rows[0].locked_until).toBeNull();
+  expect(event.rows[0].last_error).toBe(
+    "Publication acknowledgement timed out",
+  );
+
+  // Publisher 2 retries the event successfully.
+  const secondDeliveryIds: string[] = [];
+
+  const secondResult = await publishOutboxBatch(
+  {
+    async publish(retryEvent) {
+      secondDeliveryIds.push(retryEvent.id);
+    },
+  },
+  1,
+  30,
+);
+
+  expect(secondDeliveryIds).toContain(event.rows[0].id);
+  expect(secondResult.published).toBeGreaterThanOrEqual(1);
+
+  // The destination may have received the event twice.
+  expect(destinationAcceptedIds).toEqual([event.rows[0].id]);
+  expect(secondDeliveryIds).toContain(destinationAcceptedIds[0]);
+
+  const stored = await adminPool.query(
+    `SELECT status, attempts, published_at, locked_until
+     FROM outbox
+     WHERE id = $1`,
+    [event.rows[0].id],
+  );
+
+  expect(stored.rows[0].status).toBe("PUBLISHED");
+  expect(stored.rows[0].attempts).toBe(2);
+  expect(stored.rows[0].published_at).not.toBeNull();
+  expect(stored.rows[0].locked_until).toBeNull();
+});
+
 });
