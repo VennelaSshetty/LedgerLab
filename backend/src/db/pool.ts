@@ -9,4 +9,5 @@ export const pool = new Pool({
   database: process.env.POSTGRES_DB,
   user: process.env.APP_DB_USER,
   password: process.env.APP_DB_PASSWORD,
+  allowExitOnIdle: true,
 });

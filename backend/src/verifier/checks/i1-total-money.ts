@@ -19,35 +19,51 @@ interface I1QueryResult {
   missing_opening_balance_accounts: string;
 }
 
-export async function verifyI1TotalMoney(): Promise<I1Result> {
+export async function verifyI1TotalMoney(
+  accountIds?: string[],
+): Promise<I1Result> {
   try {
-    const result = await verifierPool.query<I1QueryResult>(`
+    const result = await verifierPool.query<I1QueryResult>(
+      `
+      WITH scoped_accounts AS (
+        SELECT
+          a.id,
+          a.balance_paise
+        FROM accounts a
+        WHERE
+          $1::uuid[] IS NULL
+          OR a.id = ANY($1::uuid[])
+      )
       SELECT
         (
-          SELECT COALESCE(SUM(amount_paise), 0)::text
-          FROM account_opening_balances
+          SELECT COALESCE(SUM(ob.amount_paise), 0)::text
+          FROM account_opening_balances ob
+          JOIN scoped_accounts sa
+            ON sa.id = ob.account_id
         ) AS opening_total_paise,
 
         (
-          SELECT COALESCE(SUM(balance_paise), 0)::text
-          FROM accounts
+          SELECT COALESCE(SUM(sa.balance_paise), 0)::text
+          FROM scoped_accounts sa
         ) AS current_total_paise,
 
         (
           SELECT COUNT(*)::text
-          FROM accounts a
+          FROM scoped_accounts sa
           LEFT JOIN account_opening_balances ob
-            ON ob.account_id = a.id
+            ON ob.account_id = sa.id
           WHERE ob.account_id IS NULL
         ) AS missing_opening_balance_accounts;
-    `);
+      `,
+      [accountIds ?? null],
+    );
 
     const row = result.rows[0];
 
     const expectedTotal = BigInt(row.opening_total_paise);
     const actualTotal = BigInt(row.current_total_paise);
     const missingBaselines = BigInt(
-      row.missing_opening_balance_accounts
+      row.missing_opening_balance_accounts,
     );
 
     if (missingBaselines > 0n) {

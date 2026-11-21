@@ -122,8 +122,5 @@ afterAll(async () => {
     "DELETE FROM users WHERE id = ANY($1::uuid[])",
     [[USER_ID, INSERT_USER_ID]]
   );
-
-  await pool.end();
-  await adminPool.end();
 });
 });

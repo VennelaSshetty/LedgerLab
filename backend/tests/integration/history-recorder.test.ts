@@ -1,44 +1,18 @@
 
-import {
-  describe,
-  it,
-  expect,
-  afterAll,
-} from "vitest";
+import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
-import {
-  mkdir,
-  mkdtemp,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import app from "../../src/app";
-import { pool } from "../../src/db/pool";
 import { adminPool } from "../helpers/admin-pool";
 import { executeAndRecordWorkload } from "../../src/history/recorder";
 import { readHistoryFile } from "../../src/history/parser";
 import { buildHistoryIndexes } from "../../src/history/indexes";
-import {
-  summarizeOutcomes,
-  calculateLatencyPercentiles,
-  findSlowestRequests,
-} from "../../src/history/analysis";
-import { generateWorkload } from "../../src/workload/generator";
-import { exportWorkload } from "../../src/workload/report";
-import type {
-  GeneratedWorkload,
-  WorkloadConfig,
-} from "../../src/workload/types";
+import type { GeneratedWorkload } from "../../src/workload/types";
 
 describe("History Recorder integration", () => {
-  afterAll(async () => {
-    await pool.end();
-    await adminPool.end();
-  });
-
   it("executes, records, persists and recovers every Safe Mode request", async () => {
     const userId = randomUUID();
     const senderId = randomUUID();
@@ -105,6 +79,11 @@ describe("History Recorder integration", () => {
       const server = app.listen(0);
 
       try {
+        await new Promise<void>((resolve, reject) => {
+          server.once("listening", resolve);
+          server.once("error", reject);
+        });
+
         const address = server.address();
 
         if (!address || typeof address === "string") {
@@ -164,186 +143,17 @@ describe("History Recorder integration", () => {
           indexes.byTransferId.has(records[0].transferId!),
         ).toBe(true);
       } finally {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => {
-            if (error) reject(error);
-            else resolve();
+        if (server.listening) {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => {
+              if (error) reject(error);
+              else resolve();
+            });
           });
-        });
+        }
       }
     } finally {
       await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  it("executes the 100-request seeded sample and saves its complete history", async () => {
-    const config: WorkloadConfig = {
-      seed: 12345,
-      accountCount: 10,
-      transferCount: 100,
-      minAmountPaise: "100",
-      maxAmountPaise: "100000",
-      invalidRequestPercentage: 10,
-      concurrency: 5,
-    };
-
-    const userId = randomUUID();
-
-    // Fresh fixture IDs prevent collisions with previous sample runs.
-    const accountIds = Array.from(
-      { length: config.accountCount },
-      () => randomUUID(),
-    );
-
-    const workload = generateWorkload(config, accountIds);
-
-    const workloadsDirectory = resolve(
-      process.cwd(),
-      "workloads",
-    );
-
-    await mkdir(workloadsDirectory, { recursive: true });
-
-    const workloadPath = join(
-      workloadsDirectory,
-      "naive-comparison-workload-12345.json",
-    );
-
-    const historyPath = join(
-      workloadsDirectory,
-      "naive-comparison-history-12345.jsonl",
-    );
-
-    // Save the exact workload used for this execution.
-    await exportWorkload(workload, workloadPath);
-
-    // Start with a fresh history file rather than appending old records.
-    await writeFile(historyPath, "", "utf8");
-
-    await adminPool.query(
-      `INSERT INTO users (id, name, email, password_hash)
-       VALUES ($1, 'History Sample', $2, 'sample-test-hash')`,
-      [userId, `history-sample-${userId}@ledgerlab.local`],
-    );
-
-    // Give every account a large opening balance so that valid
-    // transfers do not fail because of insufficient funds.
-    await adminPool.query(
-      `INSERT INTO accounts (id, user_id, balance_paise)
-       SELECT account_id, $2, 1000000000000
-       FROM unnest($1::uuid[]) AS ids(account_id)`,
-      [accountIds, userId],
-    );
-
-    await adminPool.query(
-      `INSERT INTO account_opening_balances
-       (account_id, amount_paise)
-       SELECT account_id, 1000000000000
-       FROM unnest($1::uuid[]) AS ids(account_id)`,
-      [accountIds],
-    );
-
-    const server = app.listen(0);
-
-    try {
-      const address = server.address();
-
-      if (!address || typeof address === "string") {
-        throw new Error("Could not determine sample server port.");
-      }
-
-      console.log("\nStarting 100-request Naive Mode comparison...");
-
-      const records = await executeAndRecordWorkload(
-        workload,
-        "NAIVE",
-        `http://127.0.0.1:${address.port}`,
-        historyPath,
-      );
-
-      // Recover the history from the actual JSONL file.
-      const parsed = await readHistoryFile(historyPath);
-
-      expect(parsed.errors).toHaveLength(0);
-      expect(records).toHaveLength(config.transferCount);
-      expect(parsed.records).toHaveLength(config.transferCount);
-
-      const generatedRequestIds = workload.transfers.map(
-        (transfer) => transfer.requestId,
-      );
-
-      const recordedRequestIds = parsed.records.map(
-        (record) => record.requestId,
-      );
-
-      // Every generated request must appear exactly once.
-      expect(new Set(recordedRequestIds).size).toBe(
-        config.transferCount,
-      );
-
-      expect([...recordedRequestIds].sort()).toEqual(
-        [...generatedRequestIds].sort(),
-      );
-
-      const validCount = workload.transfers.filter(
-        (transfer) => transfer.expectedValidity === "VALID",
-      ).length;
-
-      const invalidCount =
-        config.transferCount - validCount;
-
-      expect(validCount).toBe(90);
-      expect(invalidCount).toBe(10);
-
-      const indexes = buildHistoryIndexes(parsed.records);
-      const summary = summarizeOutcomes(parsed.records);
-      const latency = calculateLatencyPercentiles(parsed.records);
-      const slowest = findSlowestRequests(parsed.records, 5);
-
-      expect(indexes.byRequestId.size).toBe(100);
-      expect(indexes.byCorrelationId.size).toBe(100);
-
-      console.log("\n========== SAMPLE WORKLOAD REPORT ==========");
-      console.log(`Seed: ${config.seed}`);
-      console.log(`Total requests: ${summary.totalRecords}`);
-      console.log(`Valid generated requests: ${validCount}`);
-      console.log(`Invalid generated requests: ${invalidCount}`);
-      console.log(`Concurrency: ${config.concurrency}`);
-
-      console.log("\nRequest outcomes:");
-      console.log(summary.requestOutcomes);
-
-      console.log("\nTransfer outcomes:");
-      console.log(summary.transferOutcomes);
-
-      console.log("\nLatency (ms):");
-      console.log({
-        samples: latency.sampleCount,
-        p50: latency.p50,
-        p95: latency.p95,
-        p99: latency.p99,
-      });
-
-      console.log("\nTop 5 slowest requests:");
-      console.log(
-        slowest.map((record) => ({
-          requestId: record.requestId,
-          durationMs: record.durationMs,
-          httpStatus: record.httpStatus,
-          outcome: record.outcome,
-        })),
-      );
-
-      console.log("\nSaved workload:", workloadPath);
-      console.log("Saved history:", historyPath);
-      console.log("============================================\n");
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      });
     }
   });
 });

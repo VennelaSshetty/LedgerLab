@@ -250,8 +250,5 @@ describe("Ledger concurrency protection", () => {
       `DELETE FROM users WHERE id = $1`,
       [USER_ID]
     );
-
-    await pool.end();
-    await adminPool.end();
   });
 });

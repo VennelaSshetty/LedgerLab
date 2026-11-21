@@ -24,13 +24,13 @@ import { verifyI3NoNegativeBalances } from "../../src/verifier/checks/i3-no-nega
 import { verifyI5NoPartialTransfers } from "../../src/verifier/checks/i5-no-partial-transfers";
 import { verifyI6ProjectionConsistency } from "../../src/verifier/checks/i6-projection-consistency";
 
-async function verifyLedgerInvariants() {
+async function verifyLedgerInvariants(accountIds: string[]) {
   const results = await Promise.all([
-    verifyI1TotalMoney(),
-    verifyI2DebitCredit(),
-    verifyI3NoNegativeBalances(),
-    verifyI5NoPartialTransfers(),
-    verifyI6ProjectionConsistency(),
+    verifyI1TotalMoney(accountIds),
+    verifyI2DebitCredit(accountIds),
+    verifyI3NoNegativeBalances(accountIds),
+    verifyI5NoPartialTransfers(accountIds),
+    verifyI6ProjectionConsistency(accountIds),
   ]);
 
   const names = ["I1", "I2", "I3", "I5", "I6"];
@@ -53,9 +53,7 @@ async function verifyLedgerInvariants() {
 
 describe("Transfer concurrency stress tests", () => {
  afterAll(async () => {
-  await pool.end();
-  await adminPool.end();
-  await verifierPool.end();
+  
 });
 
   it(
@@ -297,7 +295,7 @@ console.log("===================================\n");
         console.log("Partial transfers:", partialTransfers.rows.length);
         console.log("=======================================\n");
 
-        await verifyLedgerInvariants();
+        await verifyLedgerInvariants(fixture.accountIds);
       } finally {
         if (server) {
           await server.close();
@@ -429,7 +427,7 @@ console.log("===================================\n");
         console.log("Receiver final balance:", receiver?.balance_paise);
         console.log("=======================================\n");
 
-        await verifyLedgerInvariants();
+        await verifyLedgerInvariants(fixture.accountIds);
       } finally {
         if (server) {
           await server.close();
@@ -611,7 +609,7 @@ console.log("===================================\n");
         console.log("PostgreSQL deadlock counter increase:", deadlocksDelta.toString());
         console.log("=======================================\n");
 
-        await verifyLedgerInvariants();
+        await verifyLedgerInvariants(fixture.accountIds);
       } finally {
         if (server) {
           await server.close();

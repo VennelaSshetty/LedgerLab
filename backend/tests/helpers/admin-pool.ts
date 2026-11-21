@@ -9,4 +9,5 @@ export const adminPool = new Pool({
   database: process.env.POSTGRES_DB,
   user: process.env.POSTGRES_USER,
   password: process.env.POSTGRES_PASSWORD,
+  allowExitOnIdle: true,
 });

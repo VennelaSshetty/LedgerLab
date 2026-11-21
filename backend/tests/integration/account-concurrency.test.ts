@@ -105,9 +105,6 @@ await adminPool.query(
       "DELETE FROM users WHERE id = $1",
       [USER_ID]
     );
-
-    await pool.end();
-    await adminPool.end();
   });
 
   it("allows only one of two simultaneous transfers to spend the balance", async () => {

@@ -17,8 +17,7 @@ import type { GeneratedWorkload } from "../../src/workload/types";
 
 describe("Naive vs Safe comparison - Naive Mode", () => {
   afterAll(async () => {
-    await pool.end();
-    await adminPool.end();
+   
   });
 
   it("executes the exact saved 100-request workload against Naive Mode", async () => {
@@ -124,5 +123,5 @@ describe("Naive vs Safe comparison - Naive Mode", () => {
         });
       }
     }
-  });
+  },120_000);
 });

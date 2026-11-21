@@ -1,4 +1,3 @@
-
 import { verifierPool } from "../../db/verifier-pool";
 
 type CheckStatus = "PASS" | "FAIL" | "NOT VERIFIED";
@@ -20,16 +19,25 @@ interface NegativeAccountRow {
   balance_paise: string;
 }
 
-export async function verifyI3NoNegativeBalances(): Promise<I3Result> {
+export async function verifyI3NoNegativeBalances(
+  accountIds?: string[],
+): Promise<I3Result> {
   try {
-    const result = await verifierPool.query<NegativeAccountRow>(`
+    const result = await verifierPool.query<NegativeAccountRow>(
+      `
       SELECT
         id::text AS account_id,
         balance_paise::text AS balance_paise
       FROM accounts
       WHERE balance_paise < 0
+        AND (
+          $1::uuid[] IS NULL
+          OR id = ANY($1::uuid[])
+        )
       ORDER BY id;
-    `);
+      `,
+      [accountIds ?? null],
+    );
 
     if (result.rows.length > 0) {
       return {

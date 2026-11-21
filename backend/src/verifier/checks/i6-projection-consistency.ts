@@ -1,4 +1,3 @@
-
 import { verifierPool } from "../../db/verifier-pool";
 
 type CheckStatus = "PASS" | "FAIL" | "NOT VERIFIED";
@@ -28,38 +27,55 @@ interface InconsistentAccountRow {
   actual_balance_paise: string;
 }
 
-export async function verifyI6ProjectionConsistency(): Promise<I6Result> {
+export async function verifyI6ProjectionConsistency(
+  accountIds?: string[],
+): Promise<I6Result> {
   try {
-    const result = await verifierPool.query<InconsistentAccountRow>(`
-      WITH ledger_totals AS (
+    const result = await verifierPool.query<InconsistentAccountRow>(
+      `
+      WITH scoped_accounts AS (
         SELECT
-          account_id,
+          a.id,
+          a.balance_paise
+        FROM accounts a
+        WHERE
+          $1::uuid[] IS NULL
+          OR a.id = ANY($1::uuid[])
+      ),
+
+      ledger_totals AS (
+        SELECT
+          le.account_id,
 
           COALESCE(
-            SUM(amount_paise) FILTER (
-              WHERE entry_type = 'CREDIT'
+            SUM(le.amount_paise) FILTER (
+              WHERE le.entry_type = 'CREDIT'
             ),
             0
           ) AS total_credits,
 
           COALESCE(
-            SUM(amount_paise) FILTER (
-              WHERE entry_type = 'DEBIT'
+            SUM(le.amount_paise) FILTER (
+              WHERE le.entry_type = 'DEBIT'
             ),
             0
           ) AS total_debits
 
-        FROM ledger_entries
-        GROUP BY account_id
+        FROM ledger_entries le
+
+        JOIN scoped_accounts sa
+          ON sa.id = le.account_id
+
+        GROUP BY le.account_id
       ),
 
       account_balances AS (
         SELECT
-          a.id AS account_id,
+          sa.id AS account_id,
           ob.amount_paise AS opening_balance,
           COALESCE(lt.total_credits, 0) AS total_credits,
           COALESCE(lt.total_debits, 0) AS total_debits,
-          a.balance_paise AS actual_balance,
+          sa.balance_paise AS actual_balance,
 
           CASE
             WHEN ob.account_id IS NULL THEN NULL
@@ -69,13 +85,13 @@ export async function verifyI6ProjectionConsistency(): Promise<I6Result> {
               - COALESCE(lt.total_debits, 0)
           END AS expected_balance
 
-        FROM accounts a
+        FROM scoped_accounts sa
 
         LEFT JOIN account_opening_balances ob
-          ON ob.account_id = a.id
+          ON ob.account_id = sa.id
 
         LEFT JOIN ledger_totals lt
-          ON lt.account_id = a.id
+          ON lt.account_id = sa.id
       )
 
       SELECT
@@ -93,7 +109,9 @@ export async function verifyI6ProjectionConsistency(): Promise<I6Result> {
         OR actual_balance::numeric <> expected_balance
 
       ORDER BY account_id;
-    `);
+      `,
+      [accountIds ?? null],
+    );
 
     if (result.rows.length > 0) {
       return {

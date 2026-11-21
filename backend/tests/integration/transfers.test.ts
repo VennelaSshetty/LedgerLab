@@ -48,8 +48,7 @@ describe("Transfer service integration", () => {
   // Do not delete ledger entries.
   // They are intentionally append-only.
   afterAll(async () => {
-    await pool.end();
-    await adminPool.end();
+    
   });
 
   it("completes a transfer with balanced ledger entries and updated balances", async () => {

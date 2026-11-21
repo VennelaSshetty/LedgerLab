@@ -441,6 +441,5 @@ await adminPool.query(
 });
 
  afterAll(async () => {
-    await pool.end();
-    await adminPool.end();
+    
   });

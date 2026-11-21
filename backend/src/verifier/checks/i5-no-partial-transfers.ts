@@ -1,4 +1,3 @@
-
 import { verifierPool } from "../../db/verifier-pool";
 
 type CheckStatus = "PASS" | "FAIL" | "NOT VERIFIED";
@@ -30,9 +29,12 @@ interface InvalidTransferRow {
   invalid_account_count: string;
 }
 
-export async function verifyI5NoPartialTransfers(): Promise<I5Result> {
+export async function verifyI5NoPartialTransfers(
+  accountIds?: string[],
+): Promise<I5Result> {
   try {
-    const result = await verifierPool.query<InvalidTransferRow>(`
+    const result = await verifierPool.query<InvalidTransferRow>(
+      `
       SELECT
         t.id::text AS transfer_id,
         t.status,
@@ -61,8 +63,14 @@ export async function verifyI5NoPartialTransfers(): Promise<I5Result> {
         )::text AS invalid_account_count
 
       FROM transfers t
+
       LEFT JOIN ledger_entries le
         ON le.transfer_id = t.id
+
+      WHERE
+        $1::uuid[] IS NULL
+        OR t.from_account_id = ANY($1::uuid[])
+        OR t.to_account_id = ANY($1::uuid[])
 
       GROUP BY
         t.id,
@@ -103,7 +111,9 @@ export async function verifyI5NoPartialTransfers(): Promise<I5Result> {
         )
 
       ORDER BY t.id;
-    `);
+      `,
+      [accountIds ?? null],
+    );
 
     if (result.rows.length > 0) {
       return {

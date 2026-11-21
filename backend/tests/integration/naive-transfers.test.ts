@@ -97,8 +97,7 @@ let receiverId: string;
 });
 
   afterAll(async () => {
-    await pool.end();
-    await adminPool.end();
+    
   });
 
   it("demonstrates a lost update when two transfers read the same balances", async () => {

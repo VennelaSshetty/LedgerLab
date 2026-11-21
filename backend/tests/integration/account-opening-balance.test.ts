@@ -87,9 +87,6 @@ describe("Account opening balance creation", () => {
       `DELETE FROM users WHERE id = $1`,
       [USER_ID]
     );
-
-    await pool.end();
-    await adminPool.end();
   });
 
   it("creates an account with a zero opening balance", async () => {

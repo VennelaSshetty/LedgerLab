@@ -9,4 +9,5 @@ export const verifierPool = new Pool({
   database: process.env.POSTGRES_DB,
   user: process.env.VERIFIER_DB_USER,
   password: process.env.VERIFIER_DB_PASSWORD,
+  allowExitOnIdle: true,
 });

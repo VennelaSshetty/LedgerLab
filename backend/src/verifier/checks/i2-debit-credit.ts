@@ -1,4 +1,3 @@
-
 import { verifierPool } from "../../db/verifier-pool";
 
 type CheckStatus = "PASS" | "FAIL" | "NOT VERIFIED";
@@ -19,10 +18,24 @@ interface I2QueryResult {
   imbalanced_transfers: string;
 }
 
-export async function verifyI2DebitCredit(): Promise<I2Result> {
+export async function verifyI2DebitCredit(
+  accountIds?: string[],
+): Promise<I2Result> {
   try {
-    const result = await verifierPool.query<I2QueryResult>(`
-      WITH per_transfer AS (
+    const result = await verifierPool.query<I2QueryResult>(
+      `
+      WITH scoped_ledger AS (
+        SELECT
+          account_id,
+          transfer_id,
+          amount_paise,
+          entry_type
+        FROM ledger_entries
+        WHERE
+          $1::uuid[] IS NULL
+          OR account_id = ANY($1::uuid[])
+      ),
+      per_transfer AS (
         SELECT
           transfer_id,
           COALESCE(
@@ -33,7 +46,7 @@ export async function verifyI2DebitCredit(): Promise<I2Result> {
             SUM(amount_paise) FILTER (WHERE entry_type = 'CREDIT'),
             0
           ) AS credit_total
-        FROM ledger_entries
+        FROM scoped_ledger
         GROUP BY transfer_id
       )
       SELECT
@@ -42,7 +55,7 @@ export async function verifyI2DebitCredit(): Promise<I2Result> {
             SUM(amount_paise) FILTER (WHERE entry_type = 'DEBIT'),
             0
           )::text
-          FROM ledger_entries
+          FROM scoped_ledger
         ) AS total_debits_paise,
 
         (
@@ -50,7 +63,7 @@ export async function verifyI2DebitCredit(): Promise<I2Result> {
             SUM(amount_paise) FILTER (WHERE entry_type = 'CREDIT'),
             0
           )::text
-          FROM ledger_entries
+          FROM scoped_ledger
         ) AS total_credits_paise,
 
         (
@@ -58,7 +71,9 @@ export async function verifyI2DebitCredit(): Promise<I2Result> {
           FROM per_transfer
           WHERE debit_total <> credit_total
         ) AS imbalanced_transfers;
-    `);
+      `,
+      [accountIds ?? null],
+    );
 
     const row = result.rows[0];
 
