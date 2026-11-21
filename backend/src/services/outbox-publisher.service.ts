@@ -26,6 +26,7 @@ export interface PublishBatchResult {
 export async function claimOutboxBatch(
   batchSize = 10,
   leaseSeconds = 30,
+  transferIds?: readonly string[],
 ): Promise<OutboxEvent[]> {
   if (!Number.isInteger(batchSize) || batchSize <= 0) {
     throw new Error("batchSize must be a positive integer");
@@ -51,15 +52,16 @@ export async function claimOutboxBatch(
       'Maximum attempts reached after publisher crash'
     )
   WHERE attempts >= $1
-    AND (
-      status = 'PENDING'
-      OR (
-        status = 'PROCESSING'
-        AND locked_until <= NOW()
-      )
+  AND (
+    status = 'PENDING'
+    OR (
+      status = 'PROCESSING'
+      AND locked_until <= NOW()
     )
+  )
+  AND ($2::uuid[] IS NULL OR transfer_id = ANY($2::uuid[]))
   `,
-  [RETRY_POLICY.maxAttempts],
+  [RETRY_POLICY.maxAttempts, transferIds ?? null],
 );
 
     const result = await client.query<OutboxEvent>(
@@ -67,18 +69,21 @@ export async function claimOutboxBatch(
       WITH candidates AS (
         SELECT id
         FROM outbox
-        WHERE
+WHERE
   (
-    status = 'PENDING'
-    AND next_attempt_at <= NOW()
-    AND attempts < $3
+    (
+      status = 'PENDING'
+      AND next_attempt_at <= NOW()
+      AND attempts < $3
+    )
+    OR
+    (
+      status = 'PROCESSING'
+      AND locked_until <= NOW()
+      AND attempts < $3
+    )
   )
-  OR
-  (
-    status = 'PROCESSING'
-    AND locked_until <= NOW()
-    AND attempts < $3
-  )
+  AND ($4::uuid[] IS NULL OR transfer_id = ANY($4::uuid[]))
         ORDER BY created_at ASC, id ASC
         LIMIT $1
         FOR UPDATE SKIP LOCKED
@@ -97,7 +102,7 @@ export async function claimOutboxBatch(
         o.payload,
         o.attempts
       `,
-      [batchSize, leaseSeconds, RETRY_POLICY.maxAttempts],
+      [batchSize, leaseSeconds, RETRY_POLICY.maxAttempts, transferIds ?? null],
     );
 
     await client.query("COMMIT");
@@ -183,8 +188,13 @@ export async function publishOutboxBatch(
   transport: OutboxTransport,
   batchSize = 10,
   leaseSeconds = 30,
+  transferIds?: readonly string[],
 ): Promise<PublishBatchResult> {
-  const events = await claimOutboxBatch(batchSize, leaseSeconds);
+const events = await claimOutboxBatch(
+  batchSize,
+  leaseSeconds,
+  transferIds,
+);
 
   const result: PublishBatchResult = {
     published: 0,

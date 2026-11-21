@@ -10,16 +10,43 @@ import { randomUUID } from "node:crypto";
 import { adminPool } from "../helpers/admin-pool";
 import { createTransfer } from "../../src/services/transfers.service";
 import {
-  claimOutboxBatch,
-  publishOutboxBatch,
+  claimOutboxBatch as claimOutboxBatchUnscoped,
+  publishOutboxBatch as publishOutboxBatchUnscoped,
   acknowledgeOutboxEvent,
   recoverFailedOutboxEvent,
+  type OutboxTransport,
 } from "../../src/services/outbox-publisher.service";
 import { ControlledOutboxTransport } from "../helpers/controlled-outbox-transport";
 
 let USER_ID: string;
 let SENDER_ID: string;
 let RECEIVER_ID: string;
+
+let testTransferIds: string[] = [];
+
+async function claimOutboxBatch(
+  batchSize = 10,
+  leaseSeconds = 30,
+) {
+  return claimOutboxBatchUnscoped(
+    batchSize,
+    leaseSeconds,
+    testTransferIds,
+  );
+}
+
+async function publishOutboxBatch(
+  transport: OutboxTransport,
+  batchSize = 10,
+  leaseSeconds = 30,
+) {
+  return publishOutboxBatchUnscoped(
+    transport,
+    batchSize,
+    leaseSeconds,
+    testTransferIds,
+  );
+}
 
 async function createOutboxEvent() {
   const result = await createTransfer({
@@ -39,21 +66,16 @@ async function createOutboxEvent() {
     [result.transfer.id],
   );
 
-  return result.transfer.id;
+  testTransferIds.push(result.transfer.id);
+
+return result.transfer.id;
 }
 
 describe("Outbox publisher integration", () => {
-  beforeEach(async () => {
-    await adminPool.query(
-  `UPDATE outbox
-   SET
-     status = 'PUBLISHED',
-     published_at = COALESCE(published_at, NOW()),
-     locked_until = NULL
-   WHERE status IN ('PENDING', 'PROCESSING')`,
-);
+ beforeEach(async () => {
+  testTransferIds = [];
 
-    USER_ID = randomUUID();
+  USER_ID = randomUUID();
     SENDER_ID = randomUUID();
     RECEIVER_ID = randomUUID();
 
